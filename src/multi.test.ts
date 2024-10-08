@@ -325,7 +325,7 @@ function run(
               );
               t.is(
                 v.message,
-                "The operation was applied to: 0 of the 1 requested resources."
+                "The 'acquire' operation was applied to: 0 of the 1 requested resources."
               );
             }
           }

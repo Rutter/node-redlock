@@ -131,7 +131,8 @@ export class ResourceLockedError extends Error {
 export class ExecutionError extends Error {
   constructor(
     public readonly message: string,
-    public readonly attempts: ReadonlyArray<Promise<ExecutionStats>>
+    public readonly attempts: ReadonlyArray<Promise<ExecutionStats>>,
+    public readonly operation: string,
   ) {
     super();
     this.name = "ExecutionError";
@@ -163,6 +164,12 @@ export class Lock {
 
 export type RedlockAbortSignal = AbortSignal & { error?: Error };
 
+interface Script {
+  readonly name: string;
+  readonly value: string;
+  readonly hash: string;
+}
+
 /**
  * A redlock object is instantiated with an array of at least one redis client
  * and an optional `options` object. Properties of the Redlock object should NOT
@@ -173,9 +180,9 @@ export default class Redlock extends EventEmitter {
   public readonly clients: Set<Client>;
   public readonly settings: Settings;
   public readonly scripts: {
-    readonly acquireScript: { value: string; hash: string };
-    readonly extendScript: { value: string; hash: string };
-    readonly releaseScript: { value: string; hash: string };
+    readonly acquireScript: Script;
+    readonly extendScript: Script;
+    readonly releaseScript: Script;
   };
 
   public constructor(
@@ -250,14 +257,17 @@ export default class Redlock extends EventEmitter {
 
     this.scripts = {
       acquireScript: {
+        name: "acquire",
         value: acquireScript,
         hash: this._hash(acquireScript),
       },
       extendScript: {
+        name: "extend",
         value: extendScript,
         hash: this._hash(extendScript),
       },
       releaseScript: {
+        name: "release",
         value: releaseScript,
         hash: this._hash(releaseScript),
       },
@@ -395,7 +405,7 @@ export default class Redlock extends EventEmitter {
 
     // The lock has already expired.
     if (existing.expiration < Date.now()) {
-      throw new ExecutionError("Cannot extend an already-expired lock.", []);
+      throw new ExecutionError("Cannot extend an already-expired lock.", [], "extend");
     }
 
     const { attempts, start } = await this._execute(
@@ -427,7 +437,7 @@ export default class Redlock extends EventEmitter {
    * will contains a `stats` property that is resolved once all votes are in.
    */
   private async _execute(
-    script: { value: string; hash: string },
+    script: Script,
     keys: string[],
     args: (string | number)[],
     _settings?: Partial<Settings>
@@ -475,15 +485,16 @@ export default class Redlock extends EventEmitter {
         });
       } else {
         throw new ExecutionError(
-          "The operation was unable to achieve a quorum during its retry window.",
-          attempts
+          `The '${script.name}' operation was unable to achieve a quorum during its retry window.`,
+          attempts,
+          script.name
         );
       }
     }
   }
 
   private async _attemptOperation(
-    script: { value: string; hash: string },
+    script: Script,
     keys: string[],
     args: (string | number)[]
   ): Promise<
@@ -563,7 +574,7 @@ export default class Redlock extends EventEmitter {
 
   private async _attemptOperationOnClient(
     client: Client,
-    script: { value: string; hash: string },
+    script: Script,
     keys: string[],
     args: (string | number)[]
   ): Promise<ClientExecutionResult> {
@@ -609,7 +620,7 @@ export default class Redlock extends EventEmitter {
       // One or more of the resources was already locked.
       if (result !== keys.length) {
         throw new ResourceLockedError(
-          `The operation was applied to: ${result} of the ${keys.length} requested resources.`
+          `The '${script.name}' operation was applied to: ${result} of the ${keys.length} requested resources.`
         );
       }
 
